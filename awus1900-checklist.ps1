@@ -11,7 +11,9 @@ param(
     [string]$AdapterPattern = 'AWUS1900|8814AU|Wireless LAN|Wi-Fi',
     [string]$OutputDir = (Get-Location).Path,
     [switch]$PingGateway,
-    [string]$ExpectedApInventoryPath = (Join-Path (Get-Location).Path 'expected-aps.json')
+    [string]$ExpectedApInventoryPath = (Join-Path (Get-Location).Path 'expected-aps.json'),
+    [string]$BaselinePath,
+    [string]$SaveBaselinePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -202,6 +204,66 @@ function Test-ExpectedApInventory {
     }
 
     return $true
+}
+
+function Get-CheckMap {
+    param(
+        [object[]]$Results
+    )
+
+    $map = @{}
+    foreach ($result in @($Results)) {
+        if ($result -and $result.Check) {
+            $map[$result.Check] = $result
+        }
+    }
+
+    return $map
+}
+
+function Compare-CheckSets {
+    param(
+        [object[]]$CurrentResults,
+        [object[]]$BaselineResults
+    )
+
+    $currentMap = Get-CheckMap -Results $CurrentResults
+    $baselineMap = Get-CheckMap -Results $BaselineResults
+    $statusChanges = @()
+    $newChecks = @()
+    $missingChecks = @()
+
+    foreach ($checkName in $currentMap.Keys) {
+        if (-not $baselineMap.ContainsKey($checkName)) {
+            $newChecks.Add($checkName)
+            continue
+        }
+
+        $current = $currentMap[$checkName]
+        $baseline = $baselineMap[$checkName]
+
+        if ($current.Status -ne $baseline.Status -or $current.Details -ne $baseline.Details) {
+            $statusChanges += [pscustomobject]@{
+                Check = $checkName
+                BaselineStatus = $baseline.Status
+                CurrentStatus = $current.Status
+                BaselineDetails = $baseline.Details
+                CurrentDetails = $current.Details
+            }
+        }
+    }
+
+    foreach ($checkName in $baselineMap.Keys) {
+        if (-not $currentMap.ContainsKey($checkName)) {
+            $missingChecks += $checkName
+        }
+    }
+
+    return [pscustomobject]@{
+        NewChecks = @($newChecks)
+        MissingChecks = @($missingChecks)
+        StatusChanges = @($statusChanges)
+    }
 }
 
 $timestamp = Get-Date
@@ -515,16 +577,70 @@ if ($PingGateway) {
 
 $results = $checks.ToArray()
 
+$baselineComparison = $null
+if ($BaselinePath) {
+    if (Test-Path -LiteralPath $BaselinePath) {
+        try {
+            $baselineReport = Get-Content -LiteralPath $BaselinePath -Raw | ConvertFrom-Json
+            $baselineComparison = Compare-CheckSets -CurrentResults $results -BaselineResults $baselineReport.Results
+        }
+        catch {
+            $baselineComparison = [pscustomobject]@{
+                Error = $_.Exception.Message
+                BaselinePath = $BaselinePath
+            }
+        }
+    }
+    else {
+        $baselineComparison = [pscustomobject]@{
+            Error = "Baseline file not found: $BaselinePath"
+            BaselinePath = $BaselinePath
+        }
+    }
+}
+
+if ($baselineComparison -and -not $baselineComparison.Error) {
+    $driftCount = @($baselineComparison.StatusChanges).Count + @($baselineComparison.NewChecks).Count + @($baselineComparison.MissingChecks).Count
+    if ($driftCount -eq 0) {
+        $results += New-CheckResult -Name 'Baseline comparison' -Status 'PASS' -Details "No drift detected against $BaselinePath."
+    }
+    else {
+        $detailsParts = @()
+        if ($baselineComparison.StatusChanges.Count -gt 0) { $detailsParts += ("Status/details changes: {0}" -f $baselineComparison.StatusChanges.Count) }
+        if ($baselineComparison.NewChecks.Count -gt 0) { $detailsParts += ("New checks: {0}" -f ($baselineComparison.NewChecks -join ', ')) }
+        if ($baselineComparison.MissingChecks.Count -gt 0) { $detailsParts += ("Missing checks: {0}" -f ($baselineComparison.MissingChecks -join ', ')) }
+        $results += New-CheckResult -Name 'Baseline comparison' -Status 'WARN' -Details (($detailsParts -join '; ') + ". Review baseline-diff JSON.")
+    }
+}
+elseif ($baselineComparison -and $baselineComparison.Error) {
+    $results += New-CheckResult -Name 'Baseline comparison' -Status 'WARN' -Details $baselineComparison.Error
+}
+
 $report = [pscustomobject]@{
     Timestamp     = $timestamp.ToString('o')
     Hostname      = $env:COMPUTERNAME
     Username      = $env:USERNAME
     ScriptPath    = $PSCommandPath
     ScriptSha256  = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+    BaselinePath  = $BaselinePath
+    BaselineComparison = $baselineComparison
     Results       = $results
 }
 
 $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+
+if ($SaveBaselinePath) {
+    $baselineSnapshot = [pscustomobject]@{
+        Timestamp    = $timestamp.ToString('o')
+        Hostname     = $env:COMPUTERNAME
+        Username     = $env:USERNAME
+        ScriptPath   = $PSCommandPath
+        ScriptSha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+        Results      = @($results | Where-Object { $_.Check -ne 'Baseline comparison' })
+    }
+
+    $baselineSnapshot | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $SaveBaselinePath -Encoding UTF8
+}
 
 $mdLines = @()
 $mdLines += "# AWUS1900 Checklist"
@@ -564,6 +680,23 @@ if (Test-Path -LiteralPath $ExpectedApInventoryPath) {
     $manifest | Add-Member -NotePropertyName ExpectedInventorySha256 -NotePropertyValue (Get-FileHash -LiteralPath $ExpectedApInventoryPath -Algorithm SHA256).Hash
 }
 
+if ($BaselinePath -and (Test-Path -LiteralPath $BaselinePath)) {
+    $manifest | Add-Member -NotePropertyName BaselinePath -NotePropertyValue $BaselinePath
+    $manifest | Add-Member -NotePropertyName BaselineSha256 -NotePropertyValue (Get-FileHash -LiteralPath $BaselinePath -Algorithm SHA256).Hash
+}
+
+if ($SaveBaselinePath) {
+    $manifest | Add-Member -NotePropertyName SavedBaselinePath -NotePropertyValue $SaveBaselinePath
+    $manifest | Add-Member -NotePropertyName SavedBaselineSha256 -NotePropertyValue (Get-FileHash -LiteralPath $SaveBaselinePath -Algorithm SHA256).Hash
+}
+
+if ($baselineComparison -and -not $baselineComparison.Error) {
+    $diffPath = "$reportBase.baseline-diff.json"
+    $baselineComparison | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $diffPath -Encoding UTF8
+    $manifest | Add-Member -NotePropertyName BaselineDiffPath -NotePropertyValue $diffPath
+    $manifest | Add-Member -NotePropertyName BaselineDiffSha256 -NotePropertyValue (Get-FileHash -LiteralPath $diffPath -Algorithm SHA256).Hash
+}
+
 $manifestPath = "$reportBase.manifest.json"
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
@@ -571,6 +704,10 @@ Write-Host "Checklist complete."
 Write-Host "Markdown: $mdPath"
 Write-Host "JSON:     $jsonPath"
 Write-Host "Manifest: $manifestPath"
+if ($baselineComparison -and -not $baselineComparison.Error) {
+    $baselineLabel = if ($BaselinePath) { $BaselinePath } else { 'none' }
+    Write-Host ("Baseline: {0}" -f $baselineLabel)
+}
 Write-Host ""
 
 $passCount = @($results | Where-Object { $_.Status -eq 'PASS' }).Count

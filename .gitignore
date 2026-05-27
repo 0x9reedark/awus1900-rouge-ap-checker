@@ -4,6 +4,9 @@ awus1900-checklist-*.json
 
 # Optional local inventory
 expected-aps.json
+baseline.json
+*.baseline-diff.json
+*.manifest.json
 
 # PowerShell and editor noise
 *.ps1.xml

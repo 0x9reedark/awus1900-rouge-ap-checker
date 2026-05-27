@@ -59,6 +59,13 @@ If your adapter name does not match the default pattern, narrow it:
 .\awus1900-checklist.ps1 -AdapterPattern '8814AU'
 ```
 
+Save a baseline and compare future runs against it:
+
+```powershell
+.\awus1900-checklist.ps1 -SaveBaselinePath .\baseline.json
+.\awus1900-checklist.ps1 -BaselinePath .\baseline.json
+```
+
 ## Output
 
 Each run writes:
@@ -66,6 +73,7 @@ Each run writes:
 - a Markdown report for humans
 - a JSON report for automation or archival
 - a manifest with SHA-256 hashes for the generated files and script
+- a baseline diff file when `-BaselinePath` is used and drift is detected
 
 The filenames are timestamped and written to the current directory unless `-OutputDir` is set.
 
