@@ -1,0 +1,19 @@
+[
+  {
+    "SSID": "Modulus-Corp",
+    "Auth": "WPA2-Enterprise",
+    "Cipher": "CCMP",
+    "BSSIDs": [
+      "00:11:22:33:44:55",
+      "00:11:22:33:44:66"
+    ]
+  },
+  {
+    "SSID": "Modulus-Guest",
+    "Auth": "WPA2-Personal",
+    "Cipher": "CCMP",
+    "BSSIDs": [
+      "00:11:22:33:44:77"
+    ]
+  }
+]

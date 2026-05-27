@@ -1,0 +1,12 @@
+# Generated reports
+awus1900-checklist-*.md
+awus1900-checklist-*.json
+
+# Optional local inventory
+expected-aps.json
+
+# PowerShell and editor noise
+*.ps1.xml
+*.log
+.DS_Store
+Thumbs.db
