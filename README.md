@@ -79,7 +79,7 @@ Example:
 ```json
 [
   {
-    "SSID": "Modulus-Corp",
+    "SSID": "Office-Corp",
     "Auth": "WPA2-Enterprise",
     "Cipher": "CCMP",
     "BSSIDs": [
