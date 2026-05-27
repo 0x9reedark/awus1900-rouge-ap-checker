@@ -65,6 +65,7 @@ Each run writes:
 
 - a Markdown report for humans
 - a JSON report for automation or archival
+- a manifest with SHA-256 hashes for the generated files and script
 
 The filenames are timestamped and written to the current directory unless `-OutputDir` is set.
 
@@ -100,7 +101,10 @@ Example:
 For the AP check specifically:
 
 - `PASS` means the observed AP matched the allowlist.
-- `WARN` means the SSID/BSSID/security combination was unexpected or could not be confirmed.
+- `WARN` means the AP was unlisted, mismatched, or the inventory was missing or invalid.
+
+If there is no approved inventory, the AP check stays conservative and reports `WARN`
+instead of assuming the SSID is safe.
 
 ## Limitations
 
@@ -122,4 +126,3 @@ For a stronger control, keep a current approved inventory and compare against it
 4. Review the report for mismatches or drift.
 5. Compare against the last known good baseline.
 6. Fix configuration issues before the environment is treated as trusted.
-

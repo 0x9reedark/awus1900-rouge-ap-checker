@@ -178,6 +178,32 @@ function Test-AllowedBssid {
     return $false
 }
 
+function Test-ExpectedApInventory {
+    param(
+        [object]$Inventory
+    )
+
+    if (-not $Inventory) {
+        return $false
+    }
+
+    foreach ($entry in @($Inventory)) {
+        if (-not ($entry.PSObject.Properties.Name -contains 'SSID') -or -not $entry.SSID) {
+            return $false
+        }
+
+        if ($entry.PSObject.Properties.Name -contains 'BSSIDs' -and $entry.BSSIDs) {
+            foreach ($bssid in @($entry.BSSIDs)) {
+                if (-not (Normalize-MacAddress $bssid)) {
+                    return $false
+                }
+            }
+        }
+    }
+
+    return $true
+}
+
 $timestamp = Get-Date
 $reportBase = Join-Path $OutputDir ("awus1900-checklist-{0:yyyyMMdd-HHmmss}" -f $timestamp)
 $jsonPath = "$reportBase.json"
@@ -429,6 +455,11 @@ $checks.Add((Add-Check -Name 'Possible rogue AP indicators' -Script {
     $details = "SSID: $ssid; Current BSSID: $currentBssid; BSSIDs seen: $bssidCount; Auth: $($match.Auth); Cipher: $($match.Cipher); APs: $($signals -join '; ')"
 
     if ($inventoryLoaded) {
+        if (-not (Test-ExpectedApInventory -Inventory $inventory)) {
+            New-CheckResult -Name 'Possible rogue AP indicators' -Status 'WARN' -Details ("Inventory at '{0}' is not valid or complete." -f $ExpectedApInventoryPath)
+            return
+        }
+
         $expectedEntry = $inventory | Where-Object { $_.SSID -eq $ssid } | Select-Object -First 1
 
         if (-not $expectedEntry) {
@@ -454,12 +485,7 @@ $checks.Add((Add-Check -Name 'Possible rogue AP indicators' -Script {
         }
     }
     else {
-        if ($bssidCount -gt 1) {
-            New-CheckResult -Name 'Possible rogue AP indicators' -Status 'WARN' -Details $details
-        }
-        else {
-            New-CheckResult -Name 'Possible rogue AP indicators' -Status 'PASS' -Details $details
-        }
+        New-CheckResult -Name 'Possible rogue AP indicators' -Status 'WARN' -Details ("No approved inventory configured; {0}" -f $details)
     }
 }))
 
@@ -490,9 +516,12 @@ if ($PingGateway) {
 $results = $checks.ToArray()
 
 $report = [pscustomobject]@{
-    Timestamp = $timestamp.ToString('o')
-    Hostname  = $env:COMPUTERNAME
-    Results   = $results
+    Timestamp     = $timestamp.ToString('o')
+    Hostname      = $env:COMPUTERNAME
+    Username      = $env:USERNAME
+    ScriptPath    = $PSCommandPath
+    ScriptSha256  = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+    Results       = $results
 }
 
 $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
@@ -513,9 +542,35 @@ foreach ($result in $results) {
 
 $mdLines | Set-Content -LiteralPath $mdPath -Encoding UTF8
 
+$manifest = [pscustomobject]@{
+    Timestamp    = $timestamp.ToString('o')
+    Hostname     = $env:COMPUTERNAME
+    Username     = $env:USERNAME
+    ScriptSha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+    Files        = @(
+        [pscustomobject]@{
+            Path   = $jsonPath
+            Sha256 = (Get-FileHash -LiteralPath $jsonPath -Algorithm SHA256).Hash
+        },
+        [pscustomobject]@{
+            Path   = $mdPath
+            Sha256 = (Get-FileHash -LiteralPath $mdPath -Algorithm SHA256).Hash
+        }
+    )
+}
+
+if (Test-Path -LiteralPath $ExpectedApInventoryPath) {
+    $manifest | Add-Member -NotePropertyName ExpectedInventoryPath -NotePropertyValue $ExpectedApInventoryPath
+    $manifest | Add-Member -NotePropertyName ExpectedInventorySha256 -NotePropertyValue (Get-FileHash -LiteralPath $ExpectedApInventoryPath -Algorithm SHA256).Hash
+}
+
+$manifestPath = "$reportBase.manifest.json"
+$manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+
 Write-Host "Checklist complete."
 Write-Host "Markdown: $mdPath"
 Write-Host "JSON:     $jsonPath"
+Write-Host "Manifest: $manifestPath"
 Write-Host ""
 
 $passCount = @($results | Where-Object { $_.Status -eq 'PASS' }).Count
